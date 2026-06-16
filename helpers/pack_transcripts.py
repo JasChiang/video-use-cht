@@ -21,6 +21,48 @@ import sys
 from pathlib import Path
 
 
+def _is_cjk(ch: str) -> bool:
+    """True for CJK ideographs and CJK/fullwidth punctuation."""
+    o = ord(ch)
+    return (
+        0x3400 <= o <= 0x9FFF      # CJK ideographs (+ Ext A)
+        or 0xF900 <= o <= 0xFAFF   # compatibility ideographs
+        or 0x3000 <= o <= 0x303F   # CJK punctuation
+        or 0xFF00 <= o <= 0xFFEF   # fullwidth forms
+    )
+
+
+def join_phrase_tokens(tokens: list[str]) -> str:
+    """Join word tokens for display.
+
+    Breeze/WhisperX char-aligns CJK (and English letters) into single-char
+    tokens. Space-joining them yields "大 家 好" / "v i d e o"; concatenating
+    blindly breaks genuine English-word takes ("hello world" -> "helloworld").
+    Rule: no space at any CJK boundary or between two single ASCII chars
+    (reconstructs 大家好 / AI / video / machinelearning); a space only between
+    real multi-char latin words.
+    """
+    out = ""
+    for i, tok in enumerate(tokens):
+        if not tok:
+            continue
+        if not out:
+            out = tok
+            continue
+        prev_ch, cur_ch = out[-1], tok[0]
+        prev_tok = tokens[i - 1]
+        both_single_ascii = (
+            len(prev_tok) == 1 and len(tok) == 1
+            and prev_ch.isascii() and prev_ch.isalnum()
+            and cur_ch.isascii() and cur_ch.isalnum()
+        )
+        if _is_cjk(prev_ch) or _is_cjk(cur_ch) or both_single_ascii:
+            out += tok
+        else:
+            out += " " + tok
+    return out
+
+
 def format_time(seconds: float) -> str:
     """Format a time in seconds as "NNN.NN" with fixed 6-char width for alignment."""
     return f"{seconds:06.2f}"
@@ -70,7 +112,7 @@ def group_into_phrases(
             current_start = None
             current_speaker = None
             return
-        text = " ".join(text_parts)
+        text = join_phrase_tokens(text_parts)
         text = text.replace(" ,", ",").replace(" .", ".").replace(" ?", "?").replace(" !", "!")
         end_time = current_words[-1].get("end", current_words[-1].get("start", current_start or 0.0))
         phrases.append({

@@ -1,6 +1,6 @@
 ---
 name: video-use-install
-description: Install video-use into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the ElevenLabs API key so the user can start editing immediately.
+description: Install video-use-cht into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the local Breeze-ASR (WhisperX) pipeline so the user can start editing immediately. Transcription is local — no transcription API key.
 ---
 
 # video-use install
@@ -15,7 +15,7 @@ Three things must exist on this machine:
 
 1. The `video-use` repo cloned somewhere stable.
 2. `ffmpeg` on `$PATH` (plus optional `yt-dlp` for online sources).
-3. An ElevenLabs API key in `.env` at the repo root (for Scribe transcription).
+3. Python deps installed (`whisperx` etc.) in a 3.10–3.12 venv. Transcription runs **locally** with Breeze-ASR — no transcription API key. `HF_TOKEN` is optional (pyannote diarization only).
 
 And one thing must be true about the current agent:
 
@@ -23,8 +23,8 @@ And one thing must be true about the current agent:
 
 ## Install prompt contract
 
-- Do everything yourself. Only ask the user for things you cannot generate — the ElevenLabs API key, and confirmation before `brew install`.
-- Prefer a stable clone path like `~/Developer/video-use` (not `/tmp`, not `~/Downloads`).
+- Do everything yourself. Only ask the user for confirmation before `brew install`, and (only for multi-speaker footage) for an optional `HF_TOKEN`.
+- Prefer a stable clone path like `~/Developer/video-use-cht` (not `/tmp`, not `~/Downloads`).
 - The skill references helpers by bare name (`transcribe.py`, `render.py`). That works because SKILL.md and `helpers/` ship together — keep them as siblings when you register the skill.
 - After install, verify by running one real command against one real file. Don't declare success on file-existence checks alone.
 
@@ -33,8 +33,8 @@ And one thing must be true about the current agent:
 ### 1. Clone to a stable path
 
 ```bash
-test -d ~/Developer/video-use || git clone https://github.com/browser-use/video-use ~/Developer/video-use
-cd ~/Developer/video-use
+test -d ~/Developer/video-use-cht || git clone <your-fork-url> ~/Developer/video-use-cht
+cd ~/Developer/video-use-cht
 ```
 
 If the repo is already there, `git pull --ff-only` and continue.
@@ -89,52 +89,45 @@ Figure out which agent you are running under, and register once. A symlink of th
 
 If you can't tell which agent you're in, ask the user once: "which agent am I running under — Claude Code, Codex, or something else?" Then pick the right target.
 
-### 5. ElevenLabs API key
+### 5. Transcription model (local) + optional diarization token
 
-Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
+Transcription is **local** via Breeze-ASR (WhisperX). There is **no transcription API key**. The
+faster-whisper Breeze-ASR-25 weights download automatically from Hugging Face on first run.
 
-1. Check existing state in this order and stop at the first hit:
+`HF_TOKEN` is OPTIONAL and only enables speaker diarization (pyannote). Without it, transcription
+still works and every word is tagged `speaker_0`.
 
-    ```bash
-    # a) env var already exported
-    [ -n "$ELEVENLABS_API_KEY" ] && echo "env"
-    # b) .env at repo root already has it
-    grep -q '^ELEVENLABS_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "dotenv"
-    ```
+1. Only if the user has **multi-speaker** footage and wants speaker labels, ask once:
 
-2. If neither is set, ask the user exactly once:
+    > For multi-speaker footage I can label who's speaking using pyannote. That needs a free Hugging
+    > Face token. Create one at https://huggingface.co/settings/tokens, accept the terms for
+    > `pyannote/speaker-diarization-community-1`, and paste it here. Or skip — single-speaker editing
+    > works fine without it.
 
-    > I need an ElevenLabs API key for transcription (word-level timestamps, speaker diarization, filler tagging). Grab one at https://elevenlabs.io/app/settings/api-keys and paste it here — I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported as `ELEVENLABS_API_KEY`, say "use env" and I'll skip.
-
-    When the user pastes a key, write it to `~/Developer/video-use/.env`:
+    When the user pastes a token, write it to `.env`:
 
     ```bash
-    printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" > ~/Developer/video-use/.env
-    chmod 600 ~/Developer/video-use/.env
+    printf 'HF_TOKEN=%s\n' "$TOKEN" > ~/Developer/video-use-cht/.env
+    chmod 600 ~/Developer/video-use-cht/.env
     ```
 
-    Never echo the key back in tool output. Never commit `.env`.
+    Never echo the token back in tool output. Never commit `.env`.
 
-3. Sanity check with a cheap, quota-free call:
-
-    ```bash
-    curl -s -o /dev/null -w '%{http_code}\n' \
-      -H "xi-api-key: $(sed -n 's/^ELEVENLABS_API_KEY=//p' ~/Developer/video-use/.env)" \
-      https://api.elevenlabs.io/v1/user
-    ```
-
-    `200` means the key works. `401` means the user pasted a wrong/expired key — ask once more and stop. Anything else (network, 5xx), move on and verify during first real transcription.
+2. (Optional) For Taiwanese-Hokkien (台語) footage, set up Breeze-ASR-26 — see "Breeze-ASR-26 (Taigi)
+   setup" in `README.md`. Default `breeze25` covers Mandarin + English.
 
 ### 6. Verify end-to-end
 
 Run one real thing. Prefer the lightest verification that still proves the pipeline is wired up:
 
 ```bash
-python ~/Developer/video-use/helpers/timeline_view.py --help >/dev/null && echo "helpers OK"
+~/Developer/video-use-cht/.venv/bin/python -c "import whisperx; print('whisperx OK')"
+~/Developer/video-use-cht/.venv/bin/python ~/Developer/video-use-cht/helpers/timeline_view.py --help >/dev/null && echo "helpers OK"
 ffprobe -version | head -1
 ```
 
-Full transcription test is optional at install time — it burns Scribe credits. Better to wait until the user hands you their first clip.
+A full transcription test downloads ~3 GB of model weights on first run. It's free (local), but
+only run it when the user hands you their first clip unless they ask.
 
 ### 7. Hand off
 
@@ -158,5 +151,6 @@ Tell the user, in one short message:
 - `yt-dlp` is optional. Don't block install on it; install lazily the first time a user asks to pull from a URL.
 - Node.js/npm are only needed for HyperFrames or Remotion slots. HyperFrames currently requires Node.js 22+.
 - HyperFrames, Remotion, and Manim are optional animation engines. Don't install or prefer one globally during setup; pick the engine per animation slot in `SKILL.md`. HyperFrames can run through `npx --yes hyperframes ...` in the slot directory. Remotion can be scaffolded with `npx create-video@latest` or installed inside the slot before rendering.
-- Never run transcription as part of install verification unless the user explicitly asks — Scribe costs real money.
+- Transcription is local and free, but the first run downloads ~3 GB of model weights — don't trigger it during install verification unless the user asks.
+- Transcription runs on CPU on Apple Silicon (CT2 has no Metal path). It's not real-time; that's expected for offline editing.
 - If the user is on Linux without a package manager Claude recognizes, print the manual `ffmpeg` install URL and wait rather than guessing.

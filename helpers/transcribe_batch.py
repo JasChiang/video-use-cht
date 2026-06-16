@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from transcribe import load_api_key, transcribe_one
+from transcribe import DEFAULT_MODEL, load_api_key, resolve_model, transcribe_one
 
 
 VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".m4v"}
@@ -43,7 +43,19 @@ def main() -> None:
         default=None,
         help="Edit output directory (default: <videos_dir>/edit)",
     )
-    ap.add_argument("--workers", type=int, default=4, help="Parallel workers (default: 4)")
+    ap.add_argument(
+        "--workers", type=int, default=1,
+        help="Parallel workers (default: 1). Breeze runs locally on CPU and "
+             "serializes inference internally, so >1 mainly overlaps ffmpeg/IO.",
+    )
+    ap.add_argument(
+        "--model", type=str, default=DEFAULT_MODEL,
+        help="Model id or alias: breeze25 (中+英, default), breeze26/taigi (台+中).",
+    )
+    ap.add_argument(
+        "--no-diarize", action="store_true",
+        help="Skip speaker diarization (single-speaker footage).",
+    )
     ap.add_argument(
         "--language",
         type=str,
@@ -93,6 +105,8 @@ def main() -> None:
                 language=args.language,
                 num_speakers=args.num_speakers,
                 verbose=False,
+                diarize=not args.no_diarize,
+                model_name=resolve_model(args.model),
             ): v
             for v in pending
         }
