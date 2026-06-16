@@ -45,6 +45,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from transcribe_breeze import load_api_key  # HF token for the optional diarization gate
+
 DEFAULT_MODEL = os.environ.get(
     "DISFLUENCY_MODEL", "jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn"
 )
@@ -157,6 +159,61 @@ def acoustic_similarity(audio, starts: list[float], last_end: float, sr: int = 1
     return min(sims) if sims else 1.0
 
 
+def diarization_gate(audio, hf_token: str, sr: int = 16000,
+                     model: str = "pyannote/speaker-diarization-community-1"):
+    """Run pyannote diarization to find the target (dominant) speaker's SOLO regions.
+
+    Overlapping speakers (e.g. a host's off-screen voiceover bleeding over the
+    interviewee) make the audio sound 'doubled', which the CTC track mis-reads as a
+    repeat/stutter. Gate those out: a detected repeat only counts if it sits in the
+    target speaker's solo speech (single speaker, no overlap).
+
+    Returns (target_timeline, overlap_timeline) as pyannote Timelines, or None if
+    diarization is unavailable.
+    """
+    if not hf_token:
+        return None
+    try:
+        import torch
+        from pyannote.audio import Pipeline
+        try:  # token kwarg renamed token<-use_auth_token across pyannote versions
+            pipe = Pipeline.from_pretrained(model, token=hf_token)
+        except TypeError:
+            pipe = Pipeline.from_pretrained(model, use_auth_token=hf_token)
+        wav = torch.from_numpy(audio).unsqueeze(0)
+        diar = pipe({"waveform": wav, "sample_rate": sr})  # in-memory → avoids torchcodec
+        # pyannote 4.x community-1 returns a DiarizeOutput wrapper, not an Annotation
+        ann = diar
+        if not hasattr(ann, "itertracks"):
+            for attr in ("speaker_diarization", "diarization", "annotation", "prediction"):
+                if hasattr(diar, attr) and hasattr(getattr(diar, attr), "itertracks"):
+                    ann = getattr(diar, attr); break
+        if not hasattr(ann, "itertracks"):
+            print(f"  ! diarization output type {type(diar).__name__} "
+                  f"(attrs: {[a for a in dir(diar) if not a.startswith('_')][:12]}); skipping gate")
+            return None
+        durs: dict = {}
+        for seg, _, spk in ann.itertracks(yield_label=True):
+            durs[spk] = durs.get(spk, 0.0) + seg.duration
+        if not durs:
+            return None
+        target = max(durs, key=durs.get)
+        return ann.label_timeline(target), ann.get_overlap()
+    except Exception as e:
+        print(f"  ! diarization gate unavailable ({type(e).__name__}: {e}); skipping gate")
+        return None
+
+
+def _covered(timeline, t0: float, t1: float) -> float:
+    """Fraction of [t0,t1] covered by a pyannote Timeline."""
+    if t1 <= t0:
+        return 0.0
+    from pyannote.core import Segment
+    seg = Segment(t0, t1)
+    inter = timeline.crop(seg, mode="intersection")
+    return sum(s.duration for s in inter) / (t1 - t0)
+
+
 def breeze_text_in(transcript: dict, t0: float, t1: float, pad: float = 0.4) -> str:
     chars = []
     for w in transcript.get("words", []):
@@ -194,6 +251,12 @@ def main() -> None:
     ap.add_argument("--sim-threshold", type=float, default=0.80,
                     help="MFCC cosine-similarity floor for Breeze-unanchored repeats. Below this, "
                          "the repeat is treated as a CTC mis-hearing and NOT cut.")
+    ap.add_argument("--diarize-gate", action="store_true",
+                    help="Use pyannote to drop repeats that fall in overlapped speech or a "
+                         "non-target speaker (e.g. a host's voiceover). Needs HF_TOKEN.")
+    ap.add_argument("--gate-min-solo", type=float, default=0.6,
+                    help="Min fraction of a repeat that must be the target speaker's SOLO speech "
+                         "to survive the diarization gate.")
     args = ap.parse_args()
 
     video = args.video.resolve()
@@ -239,11 +302,34 @@ def main() -> None:
         cut_end = round(last_end + len(unit) * unit_char_dur + args.pad, 3)
         cuts.append({
             "start": cut_start, "end": cut_end,
+            "rep_start": round(t0, 3), "rep_end": round(t1, 3),
             "unit": unit, "count_ctc": n_ctc, "count_breeze": n_bz,
             "similarity": round(sim, 3),
             "confidence": "high" if n_bz >= 1 else "medium",
             "kind": "stutter",
         })
+
+    gated = []
+    if args.diarize_gate:
+        hf = load_api_key()
+        print("  running pyannote diarization gate (target-speaker solo only) ...", flush=True)
+        gate = diarization_gate(audio, hf)
+        if gate is not None:
+            target_tl, overlap_tl = gate
+            kept = []
+            for c in cuts:
+                t0, t1 = c["rep_start"], c["rep_end"]
+                solo = _covered(target_tl, t0, t1)
+                ov = _covered(overlap_tl, t0, t1)
+                # survive only if mostly the target speaker AND mostly not overlapped
+                if solo >= args.gate_min_solo and ov < 0.4:
+                    c["solo"] = round(solo, 2)
+                    kept.append(c)
+                else:
+                    c["solo"] = round(solo, 2)
+                    c["overlap"] = round(ov, 2)
+                    gated.append(c)
+            cuts = kept
 
     out = edit_dir / f"disfluencies_{video.stem}.json"
     out.write_text(json.dumps({"cuts": cuts}, ensure_ascii=False, indent=2))
@@ -257,6 +343,10 @@ def main() -> None:
         print(f"\n=== dropped by acoustic gate (CTC mis-hearing, copies dissimilar) ===")
         for unit, n, t, sim in dropped_artifact:
             print(f"  ⚪ 「{unit}」×{n} @ {t:.2f}  sim={sim:.2f} < {args.sim_threshold}")
+    if gated:
+        print(f"\n=== gated out by diarization (overlap / non-target speaker) ===")
+        for c in gated:
+            print(f"  🚫 「{c['unit']}」 @ {c['rep_start']:.2f}  solo={c.get('solo')}  overlap={c.get('overlap')}")
     if kept_legit:
         print(f"\n=== kept (legit reduplication, Breeze agrees) ===")
         for unit, n, t in kept_legit:

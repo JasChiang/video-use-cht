@@ -191,6 +191,16 @@ shorter than video, so the two chains diverge) — it needs careful length-locki
 and playback verification before it ships. For now, clicks are a known tradeoff;
 do final join polish by ear in an NLE.
 
+**Overlapping speakers.** A second voice bleeding over the target (a host's
+off-screen voiceover) makes the audio sound doubled, which the CTC track mis-reads
+as a repeat. Pass `--diarize-gate` (needs `HF_TOKEN`): pyannote — also fully local
+after a one-time weight download — finds the target speaker's *solo* regions and
+drops any repeat sitting in overlapped or non-target speech.
+
+```bash
+python helpers/detect_disfluencies.py clip.mp4 --diarize-gate
+```
+
 > **Honest limits.** This catches *repeated-word* stutters Whisper drops, but the
 > last-mile precision (exact syllable boundary, "does this join click") still
 > needs ears — frame-perfect disfluency cleanup is a human-in-an-NLE task. The
