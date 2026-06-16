@@ -130,6 +130,33 @@ def detect_repeats(seq: list[tuple[float, str]], min_unit: int, max_unit: int):
     return reps
 
 
+def acoustic_similarity(audio, starts: list[float], last_end: float, sr: int = 16000) -> float:
+    """Min MFCC cosine similarity between adjacent repeat copies.
+
+    Real stutters repeat a near-identical syllable -> high similarity. When CTC
+    mislabels two acoustically DIFFERENT sounds as the same char (e.g. 叫家 -> 教教),
+    the copies are dissimilar -> low similarity -> we can drop the false cut.
+    """
+    import numpy as np
+    import librosa
+
+    bounds = list(starts) + [last_end]
+    vecs = []
+    for i in range(len(starts)):
+        a, b = bounds[i], max(bounds[i] + 0.05, bounds[i + 1])
+        seg = audio[int(a * sr):int(b * sr)]
+        if len(seg) < int(0.04 * sr):
+            return 1.0  # too short to judge; don't let the gate veto
+        m = librosa.feature.mfcc(y=seg.astype(np.float32), sr=sr, n_mfcc=13).mean(axis=1)
+        vecs.append(m)
+    sims = []
+    for i in range(len(vecs) - 1):
+        u, v = vecs[i], vecs[i + 1]
+        denom = (np.linalg.norm(u) * np.linalg.norm(v)) or 1.0
+        sims.append(float(np.dot(u, v) / denom))
+    return min(sims) if sims else 1.0
+
+
 def breeze_text_in(transcript: dict, t0: float, t1: float, pad: float = 0.4) -> str:
     chars = []
     for w in transcript.get("words", []):
@@ -164,6 +191,9 @@ def main() -> None:
     ap.add_argument("--max-unit", type=int, default=2, help="Max repeating unit length in chars")
     ap.add_argument("--pad", type=float, default=0.3,
                     help="Seconds added after each cut unit so the syllable tail is removed")
+    ap.add_argument("--sim-threshold", type=float, default=0.80,
+                    help="MFCC cosine-similarity floor for Breeze-unanchored repeats. Below this, "
+                         "the repeat is treated as a CTC mis-hearing and NOT cut.")
     args = ap.parse_args()
 
     video = args.video.resolve()
@@ -189,31 +219,44 @@ def main() -> None:
 
     cuts = []
     kept_legit = []
+    dropped_artifact = []
     for unit, starts, last_end in reps:
         n_ctc = len(starts)
         t0, t1 = starts[0], last_end
         bz = breeze_text_in(transcript, t0, t1)
         n_bz = count_occurrences(bz, unit)
         keep = max(1, n_bz)
-        if n_ctc > keep:
-            # cut the extra copies: from the (keep)-th unit start to the end of the run
-            cut_start = round(starts[keep], 3)
-            cut_end = round(last_end + len(unit) * unit_char_dur + args.pad, 3)
-            cuts.append({
-                "start": cut_start, "end": cut_end,
-                "unit": unit, "count_ctc": n_ctc, "count_breeze": n_bz,
-                "kind": "stutter",
-            })
-        else:
-            kept_legit.append((unit, n_ctc, t0))
+        if n_ctc <= keep:
+            kept_legit.append((unit, n_ctc, t0))  # Breeze agrees it's a real word
+            continue
+        sim = acoustic_similarity(audio, starts, last_end)
+        # Breeze anchors it (n_bz>=1) -> trust the collapse. No anchor -> the acoustic
+        # gate must confirm the copies are really near-identical, else it's a CTC mis-hear.
+        if n_bz == 0 and sim < args.sim_threshold:
+            dropped_artifact.append((unit, n_ctc, t0, sim))
+            continue
+        cut_start = round(starts[keep], 3)
+        cut_end = round(last_end + len(unit) * unit_char_dur + args.pad, 3)
+        cuts.append({
+            "start": cut_start, "end": cut_end,
+            "unit": unit, "count_ctc": n_ctc, "count_breeze": n_bz,
+            "similarity": round(sim, 3),
+            "confidence": "high" if n_bz >= 1 else "medium",
+            "kind": "stutter",
+        })
 
     out = edit_dir / f"disfluencies_{video.stem}.json"
     out.write_text(json.dumps({"cuts": cuts}, ensure_ascii=False, indent=2))
 
     print(f"\n=== stutters to CUT ({len(cuts)}) ===")
     for c in cuts:
-        print(f"  🔴 「{c['unit']}」 CTC×{c['count_ctc']} / Breeze×{c['count_breeze']}"
-              f"  → cut [{c['start']:.2f}–{c['end']:.2f}]")
+        tag = "✅" if c["confidence"] == "high" else "🟡"
+        print(f"  {tag} 「{c['unit']}」 CTC×{c['count_ctc']} / Breeze×{c['count_breeze']}"
+              f"  sim={c['similarity']:.2f} ({c['confidence']})  → cut [{c['start']:.2f}–{c['end']:.2f}]")
+    if dropped_artifact:
+        print(f"\n=== dropped by acoustic gate (CTC mis-hearing, copies dissimilar) ===")
+        for unit, n, t, sim in dropped_artifact:
+            print(f"  ⚪ 「{unit}」×{n} @ {t:.2f}  sim={sim:.2f} < {args.sim_threshold}")
     if kept_legit:
         print(f"\n=== kept (legit reduplication, Breeze agrees) ===")
         for unit, n, t in kept_legit:

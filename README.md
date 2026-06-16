@@ -174,9 +174,14 @@ python helpers/detect_disfluencies.py clip.mp4      # writes edit/disfluencies_<
 It prints the stutters to cut vs the reduplications it kept, and emits cut
 intervals you fold into an EDL. (CTC output is Simplified — it's converted to
 Traditional via OpenCC before the cross-reference, else `妈`≠`媽` mis-fires.)
-Low-confidence rows where Breeze has no anchor (`count_breeze: 0`) are CTC
-mishearings — review by ear; an acoustic self-similarity gate (MFCC/DTW) is the
-planned next step to auto-filter them.
+Rows are scored: **high** confidence = Breeze anchors the collapse (reliable);
+**medium** = no Breeze anchor, kept only if an MFCC acoustic-similarity gate
+agrees the copies are near-identical. (In practice same-speaker MFCC is coarse —
+the gate is a weak signal, not a clean filter; a frame-level DTW or a dedicated
+stutter classifier like the [StutteringSpeech](https://github.com/hongfeixue/StutteringSpeechChallenge)
+Conformer is the real fix. Review **medium** rows by ear.) The exact-match repeat
+detector also only catches short (1–2 char) repeats; long noisy repeats like
+`這個泡泡這個泡泡` slip through because CTC transcribes each pass differently.
 
 **Smoothing the joins.** Cutting inside continuous speech can click. `render.py`
 defaults to lossless hard-cut concat; pass `--xfade 30` for a 30 ms crossfade
