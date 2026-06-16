@@ -40,8 +40,8 @@ import time
 from pathlib import Path
 
 # Friendly aliases -> HF model ids. Pick per source:
-#   breeze25 = Taiwanese Mandarin + English code-switch (中+英). Pre-built CT2 weights.
-#   breeze26 = BreezeASR-Taigi: Taiwanese Hokkien + Mandarin (台+中), outputs Han characters.
+#   breeze25 = Taiwanese Mandarin + English code-switch (中 + 英). Pre-built CT2 weights.
+#   breeze26 = BreezeASR-Taigi: Taiwanese Hokkien + Mandarin (台 + 中), outputs Han characters.
 #              No public CT2 build yet -> needs local ct2-transformers-converter (see README).
 MODEL_ALIASES = {
     "breeze25": "SoybeanMilk/faster-whisper-Breeze-ASR-25",
@@ -338,7 +338,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--model", type=str, default=DEFAULT_MODEL,
-        help="Model id or alias: breeze25 (中+英, default), breeze26/taigi (台+中). "
+        help="Model id or alias: breeze25 (中 + 英, default), breeze26/taigi (台 + 中). "
              "Or any HF/CT2 model path.",
     )
     ap.add_argument(

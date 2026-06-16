@@ -44,7 +44,7 @@ Pick per source with `--model`:
 - **`breeze25`** (default) — Taiwanese Mandarin + English code-switch (**中 + 英**). Uses the prebuilt CTranslate2 weights [`SoybeanMilk/faster-whisper-Breeze-ASR-25`](https://huggingface.co/SoybeanMilk/faster-whisper-Breeze-ASR-25).
 - **`breeze26`** / **`taigi`** — [BreezeASR-Taigi](https://huggingface.co/MediaTek-Research/Breeze-ASR-26): Taiwanese Hokkien + Mandarin (**台 + 中**), transcribed into Han characters. No public CT2 build yet — see [Breeze-ASR-26 setup](#breeze-asr-26-taigi-setup).
 
-No single model is best at 中+英+台 at once, and you can't run both on the same audio. Default to `breeze25`; switch the Taigi-heavy clips to `breeze26`.
+No single model is best at 中 + 英 + 台 at once, and you can't run both on the same audio. Default to `breeze25`; switch the Taigi-heavy clips to `breeze26`.
 
 ## Manual install
 

@@ -50,7 +50,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--model", type=str, default=DEFAULT_MODEL,
-        help="Model id or alias: breeze25 (中+英, default), breeze26/taigi (台+中).",
+        help="Model id or alias: breeze25 (中 + 英, default), breeze26/taigi (台 + 中).",
     )
     ap.add_argument(
         "--no-diarize", action="store_true",
