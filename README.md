@@ -120,6 +120,41 @@ Transcribe (Breeze/WhisperX) ──> Pack ──> LLM Reasons ──> EDL ──
 
 See [`SKILL.md`](./SKILL.md) for the full production rules and editing craft.
 
+## Verify it works (no footage needed)
+
+You can smoke-test the whole pipeline with a synthetic two-speaker clip made by
+macOS `say` — useful to confirm install before you have real footage:
+
+```bash
+cd /tmp && mkdir -p vuc-test && cd vuc-test
+say -v Meijia   -o s1.aiff "大家好，歡迎收看今天的節目，今天要來聊聊 AI 影片剪輯。"
+say -v Tingting -o s2.aiff "對啊，我覺得這個 video 工具真的很方便。"
+for f in s1 s2; do ffmpeg -y -i $f.aiff -ac 1 -ar 16000 $f.wav; done
+ffmpeg -y -f lavfi -i anullsrc=r=16000:cl=mono -t 0.7 sil.wav
+printf "file 's1.wav'\nfile 'sil.wav'\nfile 's2.wav'\n" > l.txt
+ffmpeg -y -f concat -safe 0 -i l.txt -c copy conversation.wav
+
+python ~/Developer/video-use-cht/helpers/transcribe.py conversation.wav --num-speakers 2
+python ~/Developer/video-use-cht/helpers/pack_transcripts.py --edit-dir edit
+cat edit/takes_packed.md
+```
+
+You should see Traditional-Chinese text with `S0`/`S1` speaker tags and `video`
+preserved inline. (Two synthetic TTS voices are a *hard* case for diarization —
+real, distinct human voices separate far better.)
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `No matching distribution` / build errors on install | Python 3.13+ has no torch/whisperx wheels yet. Use `uv venv --python 3.12`. |
+| `GatedRepoError: ... speaker-diarization-community-1 ... not in the authorized list` | Accept the gated terms at [the model page](https://huggingface.co/pyannote/speaker-diarization-community-1) with the **same** account as your `HF_TOKEN`, then re-run. pyannote.audio 4.x uses `community-1` even if you request the older `3.1`. |
+| `torchcodec ... Could not load libtorchcodec` warning | **Harmless.** whisperx feeds audio to pyannote in-memory and never calls torchcodec. (It appears because Homebrew ships ffmpeg 8 while torchcodec wants 4–7.) |
+| Transcription feels slow | Expected. CTranslate2 has no Metal/MPS path on Apple Silicon, so Breeze runs on CPU (~1.2× realtime). Fine for offline editing. First run also downloads ~3–4 GB of weights (once). |
+| Filler words (`um`/`uh`) not getting cut | Whisper-family ASR (Breeze) tends to drop fillers, so transcript-driven filler removal is weaker than Scribe's verbatim mode. Silence-gap cutting is unaffected. |
+| All speech tagged `speaker_0` | No `HF_TOKEN`, or you passed `--no-diarize`. Single-speaker footage stays `speaker_0` by design. |
+| Chinese shows as spaced characters in older runs | Fixed — `pack_transcripts.py` now joins CJK without spaces. Re-run `pack_transcripts.py`. |
+
 ## Attribution & licenses
 
 - Forked from **[browser-use/video-use](https://github.com/browser-use/video-use)** — MIT License. The original `LICENSE` is retained in this repo.
