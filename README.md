@@ -183,14 +183,13 @@ Conformer is the real fix. Review **medium** rows by ear.) The exact-match repea
 detector also only catches short (1–2 char) repeats; long noisy repeats like
 `這個泡泡這個泡泡` slip through because CTC transcribes each pass differently.
 
-**Smoothing the joins.** Cutting inside continuous speech can click. `render.py`
-defaults to lossless hard-cut concat; pass `--xfade 30` for a 30 ms crossfade
-(audio `acrossfade` + video `xfade`, kept in sync) that kills clicks at speech
-cuts and softens single-shot jump cuts:
-
-```bash
-python helpers/render.py edl.json -o out.mp4 --no-subtitles --xfade 30
-```
+**Smoothing the joins (TODO).** Cutting inside continuous speech can click.
+`render.py` uses lossless hard-cut concat — always A/V-synced, but a join can
+click. A crossfade pass (audio `acrossfade` + video `xfade`) is the intended fix
+but the naive filtergraph drifts out of sync (per-segment audio is a few ms
+shorter than video, so the two chains diverge) — it needs careful length-locking
+and playback verification before it ships. For now, clicks are a known tradeoff;
+do final join polish by ear in an NLE.
 
 > **Honest limits.** This catches *repeated-word* stutters Whisper drops, but the
 > last-mile precision (exact syllable boundary, "does this join click") still

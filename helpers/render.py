@@ -264,55 +264,6 @@ def extract_all_segments(
 # -------- Lossless concat ----------------------------------------------------
 
 
-def _probe_duration(path: Path) -> float:
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True,
-    ).stdout.strip()
-    return float(out) if out else 0.0
-
-
-def concat_with_xfade(segment_paths: list[Path], out_path: Path, edit_dir: Path, xfade_s: float) -> None:
-    """Concat with a short crossfade at every join (video xfade + audio acrossfade,
-    advanced by the SAME duration so A/V stay locked). Kills clicks at speech cuts
-    and softens single-shot jump cuts. Re-encodes."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    n = len(segment_paths)
-    if n == 1:
-        concat_segments(segment_paths, out_path, edit_dir)
-        return
-    durs = [_probe_duration(p) for p in segment_paths]
-    d = max(0.005, xfade_s)
-    inputs = []
-    for p in segment_paths:
-        inputs += ["-i", str(p)]
-
-    vparts, aparts = [], []
-    vlabel, alabel = "0:v", "0:a"
-    cum = durs[0]
-    for k in range(1, n):
-        offset = max(0.0, cum - d)
-        nv, na = f"v{k}", f"a{k}"
-        vparts.append(f"[{vlabel}][{k}:v]xfade=transition=fade:duration={d:.3f}:offset={offset:.3f}[{nv}]")
-        aparts.append(f"[{alabel}][{k}:a]acrossfade=d={d:.3f}[{na}]")
-        vlabel, alabel = nv, na
-        cum += durs[k] - d
-    fc = ";".join(vparts + aparts)
-
-    cmd = [
-        "ffmpeg", "-y", *inputs,
-        "-filter_complex", fc,
-        "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
-        "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart",
-        str(out_path),
-    ]
-    print(f"concat (xfade {d*1000:.0f}ms) → {out_path.name}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
-
 def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -> None:
     """Lossless concat via the concat demuxer. No re-encode."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -650,14 +601,6 @@ def main() -> None:
         action="store_true",
         help="Skip audio loudness normalization. Default is on (-14 LUFS, -1 dBTP, LRA 11).",
     )
-    ap.add_argument(
-        "--xfade",
-        type=float,
-        default=0.0,
-        help="Crossfade joins by this many ms (audio acrossfade + video xfade, kept in sync). "
-             "Default 0 = lossless hard-cut concat. Try 25-40ms to kill clicks at speech cuts "
-             "and soften single-shot jump cuts. Re-encodes.",
-    )
     args = ap.parse_args()
 
     edl_path = args.edl.resolve()
@@ -681,10 +624,7 @@ def main() -> None:
     else:
         base_name = "base.mp4"
     base_path = edit_dir / base_name
-    if args.xfade and args.xfade > 0:
-        concat_with_xfade(segment_paths, base_path, edit_dir, args.xfade / 1000.0)
-    else:
-        concat_segments(segment_paths, base_path, edit_dir)
+    concat_segments(segment_paths, base_path, edit_dir)
 
     # 3. Subtitles: build if requested, resolve final path
     subs_path: Path | None = None

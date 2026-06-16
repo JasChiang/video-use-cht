@@ -125,11 +125,7 @@ python helpers/detect_disfluencies.py clip.mp4      # 寫出 edit/disfluencies_<
 
 它會列出「該砍的結巴」vs「保留的疊詞」,並吐出可併入 EDL 的切點。(CTC 輸出是簡體,交叉比對前會用 OpenCC 轉繁體,否則 `妈`≠`媽` 會誤判。)Breeze 無對應(`count_breeze: 0`)的是 CTC 聽錯的低信心項 —— 用耳朵複查;聲學自相似 gate(MFCC/DTW)是計劃中的下一步,用來自動過濾這些。
 
-**接點柔化。** 在連續語音裡切會喀噠。`render.py` 預設無損硬切;加 `--xfade 30` 做 30ms 交叉溶接(音訊 `acrossfade` + 影片 `xfade` 同步),消除切點喀噠、順便柔化單機位跳接:
-
-```bash
-python helpers/render.py edl.json -o out.mp4 --no-subtitles --xfade 30
-```
+**接點柔化(TODO)。** 在連續語音裡切會喀噠。`render.py` 用無損硬切 —— 一定同步,但接點可能喀噠。交叉溶接(音訊 `acrossfade` + 影片 `xfade`)是預定解法,但天真的 filtergraph 會不同步(每段音訊比影片短幾 ms,兩條鏈會發散),需要仔細鎖定長度並驗證播放才能上線。目前接點喀噠是已知取捨,最後的接點打磨建議在 NLE 裡用耳朵收尾。
 
 > **誠實的極限。** 這能抓到 Whisper 漏掉的**重複詞**結巴,但最後一哩(精準音節邊界、接點會不會喀噠)還是要耳朵 —— frame 級的結巴精修是人在 NLE 裡的活。這裡 verbatim/正規化雙軌的形狀,跟當前的中文結巴研究([AS-70](https://huggingface.co/datasets/AImpower/MandarinStutteredSpeech)、[StutteringSpeech Challenge](https://github.com/hongfeixue/StutteringSpeechChallenge))一致;[Paraformer-zh(FunASR)](https://github.com/modelscope/FunASR) 是 CTC 軌的中文原生升級選項。
 
