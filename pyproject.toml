@@ -7,6 +7,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "whisperx",        # ASR (faster-whisper/CT2) + wav2vec2 alignment + pyannote diarization
+    "opencc-python-reimplemented",  # Simplified->Traditional for the disfluency CTC cross-reference
     "librosa",
     "matplotlib",
     "pillow",

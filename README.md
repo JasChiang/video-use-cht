@@ -144,6 +144,58 @@ This fork was designed and implemented interactively with [Claude Code](https://
 
 This was an iterative process — including real bugs found only by running it end-to-end (a renamed `token` kwarg, the `community-1` gating, the harmless `torchcodec` warning). The [Troubleshooting](#troubleshooting) table is the distilled result.
 
+## Catching stutters Whisper hides (local verbatim CTC track)
+
+Breeze (like all Whisper-family ASR) is trained on clean transcripts, so it
+**normalizes disfluencies away**: a stuttered `去去去` comes back as a single
+`去`, with neighbouring timestamps stretched to cover the audio. The repeats are
+in the audio but not the transcript — so transcript-driven cutting can't see
+them. This is the core reason "make stumbly speech smooth" is hard with Whisper.
+
+`helpers/detect_disfluencies.py` works around it with **two local tracks**:
+
+- **Breeze** = the accurate, *normalized* transcript (one `去`)
+- **wav2vec2 CTC** ([`jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn`], the
+  same weights WhisperX caches) = a *verbatim* track — CTC has no language model
+  suppressing repeats, so it emits `去去去` with per-character timing
+
+Cross-reference the two:
+
+```
+CTC has the repeat  +  Breeze collapsed it   →  real stutter   →  CUT the extras
+CTC has the repeat  +  Breeze ALSO has it    →  legit word     →  KEEP
+                                                (媽媽 / 等等 / 看看 / 走走)
+```
+
+```bash
+python helpers/detect_disfluencies.py clip.mp4      # writes edit/disfluencies_<stem>.json
+```
+
+It prints the stutters to cut vs the reduplications it kept, and emits cut
+intervals you fold into an EDL. (CTC output is Simplified — it's converted to
+Traditional via OpenCC before the cross-reference, else `妈`≠`媽` mis-fires.)
+Low-confidence rows where Breeze has no anchor (`count_breeze: 0`) are CTC
+mishearings — review by ear; an acoustic self-similarity gate (MFCC/DTW) is the
+planned next step to auto-filter them.
+
+**Smoothing the joins.** Cutting inside continuous speech can click. `render.py`
+defaults to lossless hard-cut concat; pass `--xfade 30` for a 30 ms crossfade
+(audio `acrossfade` + video `xfade`, kept in sync) that kills clicks at speech
+cuts and softens single-shot jump cuts:
+
+```bash
+python helpers/render.py edl.json -o out.mp4 --no-subtitles --xfade 30
+```
+
+> **Honest limits.** This catches *repeated-word* stutters Whisper drops, but the
+> last-mile precision (exact syllable boundary, "does this join click") still
+> needs ears — frame-perfect disfluency cleanup is a human-in-an-NLE task. The
+> verbatim/normalized two-track shape here mirrors current Mandarin-stutter
+> research ([AS-70](https://huggingface.co/datasets/AImpower/MandarinStutteredSpeech),
+> [StutteringSpeech Challenge](https://github.com/hongfeixue/StutteringSpeechChallenge));
+> [Paraformer-zh (FunASR)](https://github.com/modelscope/FunASR) is a strong
+> native-Chinese upgrade to the CTC track.
+
 ## Verify it works (no footage needed)
 
 You can smoke-test the whole pipeline with a synthetic two-speaker clip made by
