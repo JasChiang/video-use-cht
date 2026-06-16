@@ -4,10 +4,16 @@
 
 # video-use-cht
 
-**A Traditional-Chinese / Taiwanese-Mandarin fork of [video-use](https://github.com/browser-use/video-use).**
-It swaps the ElevenLabs Scribe transcription backend for a **local [Breeze-ASR](https://huggingface.co/MediaTek-Research/Breeze-ASR-25) (via WhisperX)** pipeline — better 中文 / 台語 / 中英 code-switch accuracy, runs on-device, no transcription API key. Everything downstream (packing, EDL, render, self-eval) is unchanged from upstream.
+**English** · [繁體中文](./README.zh-TW.md)
 
-> This is an independent fork. It is **not** affiliated with or endorsed by Browser Use or MediaTek Research. See [Attribution & licenses](#attribution--licenses).
+> ### 🍴 Fork of [browser-use/video-use](https://github.com/browser-use/video-use)
+> A Traditional-Chinese / Taiwanese-Mandarin derivative that swaps the cloud
+> **ElevenLabs Scribe** transcription backend for a **local [Breeze-ASR](https://huggingface.co/MediaTek-Research/Breeze-ASR-25) (via WhisperX)** pipeline.
+> All credit for the original editor design goes to **Browser Use**; this fork only
+> changes transcription. Independent project — **not** affiliated with or endorsed by
+> Browser Use or MediaTek Research. See [Attribution & licenses](#attribution--licenses).
+
+Better 中文 / 台語 / 中英 code-switch accuracy, runs on-device, no transcription API key. Everything downstream (packing, EDL, render, self-eval) is unchanged from upstream.
 
 Drop raw footage in a folder, chat with Claude Code, get `final.mp4` back. Works for any content — talking heads, montages, tutorials, travel, interviews — without presets or menus.
 
@@ -120,6 +126,24 @@ Transcribe (Breeze/WhisperX) ──> Pack ──> LLM Reasons ──> EDL ──
 
 See [`SKILL.md`](./SKILL.md) for the full production rules and editing craft.
 
+## Why these choices (built with Claude Code)
+
+This fork was designed and implemented interactively with [Claude Code](https://www.anthropic.com/claude-code). The key decisions, and the reasoning behind them:
+
+- **Why a new ASR at all — Breeze-ASR.** Upstream's ElevenLabs Scribe is cloud, paid, and tuned for English. Breeze-ASR-25 is Whisper-large-v2 fine-tuned by MediaTek Research for *Taiwanese Mandarin + Mandarin-English code-switch* (~10% better CER, +56% code-switch vs vanilla Whisper), and Breeze-ASR-26 adds Taigi. Running it locally also makes transcription free and private.
+
+- **Why WhisperX, not Breeze directly.** video-use has a hard rule: *word-level timestamps only* — it snaps every cut to a word boundary. But Whisper-family models (Breeze included) produce **jittery native word timestamps for Chinese**, because Chinese has no word boundaries and the timing is inferred from cross-attention. WhisperX runs the Breeze transcription through **wav2vec2 forced alignment**, giving far steadier per-character timing — and it bundles **pyannote diarization** in the same pass, covering speaker labels too. So WhisperX = Breeze's accuracy + reliable timestamps + diarization in one pipeline.
+
+- **Why the "Scribe-compatible `words[]`" seam.** The transcription backend is the *only* thing this fork changes. Everything downstream (`pack_transcripts.py`, the EDL, render, self-eval) reads a single JSON `words[]` array. So the adapter ([`helpers/transcribe_breeze.py`](./helpers/transcribe_breeze.py)) maps WhisperX output into the exact same schema ElevenLabs Scribe emitted (`type`/`start`/`end`/`text`/`speaker_id`, synthesizing `spacing` entries and mapping `SPEAKER_00 → speaker_0`). That kept the diff tiny and left upstream's editing logic untouched.
+
+- **Why pyannote `speaker-diarization-community-1`.** We first targeted `3.1`, but pyannote.audio 4.x pulls `community-1` artifacts even when you request 3.1 — so we pin `community-1` directly (its gated terms are what you accept).
+
+- **Why CPU on Apple Silicon.** CTranslate2 (faster-whisper's engine) has no Metal/MPS path, so Breeze runs on CPU. For *offline* editing that's an acceptable trade for local + free; alignment and diarization can still use MPS.
+
+- **The CJK packing fix.** WhisperX char-aligns Chinese (and even splits English into single letters), which made the packed transcript read as `大 家 好` / `v i d e o`. `pack_transcripts.py` now joins tokens CJK-aware: no space at any CJK boundary or between single ASCII chars, a space only between real multi-char latin words.
+
+This was an iterative process — including real bugs found only by running it end-to-end (a renamed `token` kwarg, the `community-1` gating, the harmless `torchcodec` warning). The [Troubleshooting](#troubleshooting) table is the distilled result.
+
 ## Verify it works (no footage needed)
 
 You can smoke-test the whole pipeline with a synthetic two-speaker clip made by
@@ -163,3 +187,5 @@ real, distinct human voices separate far better.)
 - Pipeline via **[WhisperX](https://github.com/m-bain/whisperX)** (BSD-2) and **[pyannote.audio](https://github.com/pyannote/pyannote-audio)** (MIT, gated weights).
 
 **Changes from upstream:** replaced the ElevenLabs Scribe backend (`helpers/transcribe.py`) with a local Breeze-ASR/WhisperX backend (`helpers/transcribe_breeze.py`); updated `pyproject.toml`, `.env.example`, and this README accordingly. All other editing logic is upstream's.
+
+**Built with [Claude Code](https://www.anthropic.com/claude-code).** The fork — backend swap, CJK packing fix, docs, and end-to-end testing — was implemented with Claude Code's help.
